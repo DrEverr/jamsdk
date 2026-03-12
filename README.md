@@ -176,7 +176,7 @@ jam-build [options] <source.c3> [additional sources...]
 
 Options:
   --sdk-dir <path>     Path to SDK jamsdk.c3l/ directory (default: auto-detect)
-  --output|-o <path>      Output .jam file path (default: build/<name>.jam)
+  --output|-o <path>   Output .jam file path (default: build/<name>.jam)
   --authorizer         Build as authorizer instead of service
   --keep-intermediates Keep .elf and .polkavm files next to output
 ```
