@@ -150,7 +150,10 @@ fn convert(data: &[u8]) -> Result<Vec<u8>, String> {
     // Build JAM format output
     let mut output = Vec::new();
 
-    // Header: ro_data_size (u24), rw_data_size (u24), zero_pages (u16), stack_size (u24)
+    // Metadata prefix: varU32(0) = empty metadata (required by JAM service blob format)
+    output.push(0x00);
+
+    // SPI header: ro_data_size (u24), rw_data_size (u24), zero_pages (u16), stack_size (u24)
     output.extend_from_slice(&(ro_data_size as u32).to_le_bytes()[..3]); // u24
     output.extend_from_slice(&(rw_data_size as u32).to_le_bytes()[..3]); // u24
     output.extend_from_slice(&0u16.to_le_bytes()); // zero_pages = 0
