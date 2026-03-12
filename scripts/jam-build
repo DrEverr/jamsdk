@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# jam-build: Build a C3 JAM service into a .jam blob.
+#
+# Pipeline:
+#   1. c3c compile-only  -> RISC-V .o files from C3 sources
+#   2. clang -c          -> host_stubs.o (PolkaVM metadata for host imports)
+#   3. ld.lld            -> linked ELF (with emit-relocs for polkatool)
+#   4. polkatool link    -> .polkavm binary (with dispatch table)
+#   5. polkavm-to-jam    -> .jam blob
+#
+# Usage:
+#   jam-build [options] <source.c3> [additional sources...]
+#
+# Options:
+#   --sdk-dir <path>     Path to the JAM SDK src/ directory (default: auto-detect)
+#   --output <path>      Output .jam file path (default: build/<name>.jam)
+#   --authorizer         Build as an authorizer instead of a service
+#   --keep-intermediates Keep .elf and .polkavm files next to output
+#   --help               Show this help message
+#
+# Requirements:
+#   - c3c            (C3 compiler with elf-riscv64 target)
+#   - clang          (for compiling host_stubs.c -> PolkaVM metadata)
+#   - polkatool      (PolkaVM linker/post-processor)
+#   - polkavm-to-jam (converter from .polkavm to .jam format)
+
+set -euo pipefail
+
+# ---- Defaults ----
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SDK_DIR="${SCRIPT_DIR}/../jamsdk.c3l"
+
+# In Docker the SDK lives at /opt/jamsdk/jamsdk.c3l.
+if ! ls "${SDK_DIR}"/*.c3 &>/dev/null && [[ -d "/opt/jamsdk/jamsdk.c3l" ]]; then
+    SDK_DIR="/opt/jamsdk/jamsdk.c3l"
+fi
+
+OUTPUT=""
+AUTHORIZER=false
+KEEP_INTERMEDIATES=false
+SOURCES=()
+MIN_STACK_SIZE=131072  # 128 KiB
+
+# ---- Parse arguments ----
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --sdk-dir)
+            SDK_DIR="$2"
+            shift 2
+            ;;
+        --output|-o)
+            OUTPUT="$2"
+            shift 2
+            ;;
+        --authorizer)
+            AUTHORIZER=true
+            shift
+            ;;
+        --keep-intermediates)
+            KEEP_INTERMEDIATES=true
+            shift
+            ;;
+        --help|-h)
+            sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+            exit 0
+            ;;
+        -*)
+            echo "Error: Unknown option: $1" >&2
+            exit 1
+            ;;
+        *)
+            SOURCES+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ ${#SOURCES[@]} -eq 0 ]]; then
+    echo "Error: No source files specified." >&2
+    echo "Usage: jam-build [options] <source.c3> [additional sources...]" >&2
+    exit 1
+fi
+
+# ---- Derive output name ----
+FIRST_SOURCE="${SOURCES[0]}"
+BASENAME="$(basename "${FIRST_SOURCE}" .c3)"
+if [[ -z "$OUTPUT" ]]; then
+    OUTPUT="build/${BASENAME}.jam"
+fi
+
+# Ensure the output directory exists
+mkdir -p "$(dirname "${OUTPUT}")"
+
+# ---- Temp dir ----
+TEMP_DIR=$(mktemp -d)
+if [[ "$KEEP_INTERMEDIATES" == false ]]; then
+    trap 'rm -rf "$TEMP_DIR"' EXIT
+fi
+
+OBJ_DIR="${TEMP_DIR}/obj"
+mkdir -p "${OBJ_DIR}"
+TEMP_ELF="${TEMP_DIR}/${BASENAME}.elf"
+TEMP_POLKAVM="${TEMP_DIR}/${BASENAME}.polkavm"
+
+# ---- Check tool availability ----
+for tool in c3c polkatool polkavm-to-jam; do
+    if ! command -v "$tool" &>/dev/null; then
+        echo "Error: '$tool' not found in PATH." >&2
+        exit 1
+    fi
+done
+
+# Find a clang. Prefer clang-20, then clang-19, ..., then plain clang.
+CLANG=""
+for v in 20 19 18 17 16 15 ""; do
+    candidate="clang${v:+-$v}"
+    if command -v "$candidate" &>/dev/null; then
+        CLANG="$candidate"
+        break
+    fi
+done
+if [[ -z "$CLANG" ]]; then
+    echo "Error: No clang compiler found. Install clang (needed for PolkaVM host stubs)." >&2
+    exit 1
+fi
+
+# Find ld.lld (matching clang version or plain)
+LLD=""
+for v in 20 19 18 17 16 15 ""; do
+    candidate="ld.lld${v:+-$v}"
+    if command -v "$candidate" &>/dev/null; then
+        LLD="$candidate"
+        break
+    fi
+done
+if [[ -z "$LLD" ]]; then
+    echo "Error: No ld.lld linker found. Install lld." >&2
+    exit 1
+fi
+
+# ---- Collect SDK C3 sources ----
+SDK_C3_SOURCES=()
+for f in "${SDK_DIR}"/*.c3; do
+    [[ -f "$f" ]] || continue
+    fname="$(basename "$f")"
+
+    # Skip authorizer entry for services, skip service entries for authorizers
+    if [[ "$AUTHORIZER" == true && "$fname" == "entry.c3" ]]; then
+        continue
+    fi
+    if [[ "$AUTHORIZER" == false && "$fname" == "entry_authorizer.c3" ]]; then
+        continue
+    fi
+
+    SDK_C3_SOURCES+=("$f")
+done
+
+# Locate host_stubs.c
+HOST_STUBS="${SDK_DIR}/host_stubs.c"
+if [[ ! -f "$HOST_STUBS" ]]; then
+    echo "Error: host_stubs.c not found at ${HOST_STUBS}" >&2
+    exit 1
+fi
+
+# ---- Step 1: Compile C3 sources -> RISC-V .o files ----
+echo "[1/5] Compiling C3 -> RISC-V object files..."
+
+# PolkaVM only supports integer instructions (no FP). Use rvimac + int-only ABI.
+# Use -g0 to skip debug info (polkatool doesn't support all DWARF instructions).
+# Optimization is forced to -O0: at -O1+ the LLVM backend may use RISC-V registers
+# a6/a7 which do not exist in PolkaVM's 13-register file (a0-a5 max).
+c3c compile-only \
+    --target elf-riscv64 \
+    --use-stdlib=no \
+    --link-libc=no \
+    --reloc=pic \
+    --riscv-cpu=rvimac \
+    --riscv-abi=int-only \
+    -g0 \
+    -O0 \
+    --obj-out "${OBJ_DIR}" \
+    "${SDK_C3_SOURCES[@]}" \
+    "${SOURCES[@]}"
+
+C3_OBJS=()
+for f in "${OBJ_DIR}"/*.o; do
+    [[ -f "$f" ]] && C3_OBJS+=("$f")
+done
+echo "  -> ${#C3_OBJS[@]} object files"
+
+# ---- Step 2: Compile host_stubs.c -> host_stubs.o ----
+echo "[2/5] Compiling host stubs (PolkaVM metadata)..."
+
+STUBS_OBJ="${OBJ_DIR}/host_stubs.o"
+# Match c3c's rvimac int-only ABI target
+STUBS_DEFINES=""
+if [[ "$AUTHORIZER" == true ]]; then
+    STUBS_DEFINES="-DJAM_BUILD_AUTHORIZER=1"
+fi
+
+${CLANG} \
+    --target=riscv64-unknown-none-elf \
+    -march=rv64imac_zbb \
+    -mabi=lp64 \
+    -fpic -fPIE \
+    -mrelax \
+    -nostdinc -nostdlib \
+    -fno-builtin \
+    ${STUBS_DEFINES} \
+    -c \
+    -o "${STUBS_OBJ}" \
+    "${HOST_STUBS}"
+
+echo "  -> ${STUBS_OBJ}"
+
+# ---- Step 3: Link all objects -> ELF ----
+echo "[3/5] Linking -> RISC-V ELF..."
+
+# --unresolved-symbols=ignore-all: some entry points (e.g. jam_entry_is_authorized
+# for service builds) are referenced by export stubs but not defined.
+# polkatool only uses the dispatch table entries, so unused exports are harmless.
+${LLD} \
+    --emit-relocs \
+    --no-relax \
+    --entry=0 \
+    --error-limit=0 \
+    --unresolved-symbols=ignore-all \
+    -o "${TEMP_ELF}" \
+    "${C3_OBJS[@]}" \
+    "${STUBS_OBJ}"
+
+echo "  -> ${TEMP_ELF}"
+
+# ---- Step 4: polkatool link -> .polkavm ----
+echo "[4/5] polkatool link -> .polkavm..."
+
+if [[ "$AUTHORIZER" == true ]]; then
+    DISPATCH_TABLE="jam_entry_is_authorized"
+else
+    DISPATCH_TABLE="jam_entry_refine,jam_entry_accumulate,jam_entry_accumulate,jam_entry_accumulate"
+fi
+
+polkatool link \
+    --dispatch-table "${DISPATCH_TABLE}" \
+    --min-stack-size ${MIN_STACK_SIZE} \
+    "${TEMP_ELF}" \
+    -o "${TEMP_POLKAVM}"
+
+echo "  -> ${TEMP_POLKAVM}"
+
+# ---- Step 5: polkavm-to-jam -> .jam ----
+echo "[5/5] polkavm-to-jam -> .jam..."
+
+polkavm-to-jam "${TEMP_POLKAVM}" -o "${OUTPUT}"
+
+echo "  -> ${OUTPUT}"
+
+# ---- Optionally copy intermediates ----
+if [[ "$KEEP_INTERMEDIATES" == true ]]; then
+    OUT_DIR="$(dirname "${OUTPUT}")"
+    cp "${TEMP_ELF}"     "${OUT_DIR}/${BASENAME}.elf"
+    cp "${TEMP_POLKAVM}" "${OUT_DIR}/${BASENAME}.polkavm"
+    echo ""
+    echo "Intermediates:"
+    echo "  ${OUT_DIR}/${BASENAME}.elf      (polkatool disassemble to inspect)"
+    echo "  ${OUT_DIR}/${BASENAME}.polkavm  (polkatool disassemble to inspect)"
+fi
+
+echo ""
+echo "Build complete: ${OUTPUT}"

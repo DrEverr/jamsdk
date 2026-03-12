@@ -1,0 +1,8 @@
+build/
+out/
+.git/
+*.a
+*.o
+*.jam
+*.polkavm
+*.elf

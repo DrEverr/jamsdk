@@ -1,0 +1,19 @@
+{
+  "langrev": "1",
+  "warnings": [ "no-unused" ],
+  "dependency-search-paths": [ "../..", "../../lib" ],
+  "dependencies": [ "jamsdk" ],
+  "version": "0.1.0",
+  "sources": [ "*.c3" ],
+  "build-dir": "build",
+  "output": "build",
+  "cpu": "generic",
+  "opt": "O3",
+  "use-stdlib": false,
+  "link-libc": false,
+  "targets": {
+    "hello-world": {
+      "type": "executable"
+    }
+  }
+}

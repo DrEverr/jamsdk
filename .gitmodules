@@ -1,0 +1,3 @@
+[submodule "jamsdk.c3l"]
+	path = jamsdk.c3l
+	url = git@github.com:DrEverr/jamsdk.c3l.git

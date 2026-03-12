@@ -1,0 +1,9 @@
+[package]
+name = "polkavm-to-jam"
+version = "0.1.0"
+edition = "2021"
+description = "Convert PolkaVM blob format to JAM format (patched for polkatool 0.29+)"
+
+[[bin]]
+name = "polkavm-to-jam"
+path = "src/main.rs"
