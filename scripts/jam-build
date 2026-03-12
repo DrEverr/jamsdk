@@ -13,10 +13,10 @@
 #
 # Options:
 #   --sdk-dir <path>     Path to the JAM SDK src/ directory (default: auto-detect)
-#   --output <path>      Output .jam file path (default: build/<name>.jam)
+#   --output|-o <path>   Output .jam file path (default: build/<name>.jam)
 #   --authorizer         Build as an authorizer instead of a service
 #   --keep-intermediates Keep .elf and .polkavm files next to output
-#   --help               Show this help message
+#   --help|-h            Show this help message
 #
 # Requirements:
 #   - c3c            (C3 compiler with elf-riscv64 target)

@@ -56,7 +56,7 @@ COPY scripts/    /opt/jamsdk/scripts/
 RUN chmod +x /opt/jamsdk/scripts/jam-build \
     && ln -s /opt/jamsdk/scripts/jam-build /usr/local/bin/jam-build
 
-WORKDIR /work
+WORKDIR /app
 
 ENTRYPOINT ["jam-build"]
 CMD ["--help"]

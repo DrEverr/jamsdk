@@ -65,7 +65,7 @@ docker pull --platform=linux/amd64 ghcr.io/dreverr/jamsdk:latest
 
 ```bash
 docker run --rm --platform=linux/amd64 \
-  -v ./my-service:/work \
+  -v ./my-service:/app \
   ghcr.io/dreverr/jamsdk my_service.c3
 ```
 
@@ -75,7 +75,7 @@ Output: `build/my_service.jam`
 
 ```bash
 docker run --rm --platform=linux/amd64 \
-  -v ./my-auth:/work \
+  -v ./my-auth:/app \
   ghcr.io/dreverr/jamsdk --authorizer my_auth.c3
 ```
 
