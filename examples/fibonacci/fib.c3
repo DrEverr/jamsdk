@@ -15,7 +15,7 @@ fn void refine(types::RefineArgs* args) @export("refine") {
     log::warn("fib", "Refine: empty payload. Calculating default value=10");
   } else {
     codec::DecodeCtx ctx = codec::decode_ctx_init(args.work_payload, args.work_payload_len);
-    ulong? decoded = codec::decode_u64(&ctx);
+    ulong? decoded = codec::decode_u8(&ctx);
     if (catch decoded)
     {
       log::warn("fib", "Refine: failed to decode payload. Calculating default value=10");
@@ -32,29 +32,7 @@ fn void refine(types::RefineArgs* args) @export("refine") {
   service::return_to_host(&buf, 8);
 }
 
-fn void accumulate(types::AccumulateArgs* args) @export("accumulate") {
-  log::debug_u64("fib", "Accumulate: entry, service: ", args.service_id);
-  log::debug_u64("fib", "Accumulate: timeslot: ", args.timeslot);
-
-  char[128] input_buf;
-  ulong? input_len = service::fetch_inputs(&input_buf, 128);
-  if (catch input_len)
-  {
-      log::warn("fib", "Accumulate: no inputs available");
-      return;
-  }
-
-  codec::DecodeCtx ctx = codec::decode_ctx_init(&input_buf, input_len);
-
-  ulong? result = codec::decode_u64(&ctx);
-  if (catch result)
-  {
-      log::err("fib", "Accumulate: failed to decode result");
-      return;
-  }
-
-  log::debug_u64("fib", "Calculated fibonacci result: ", result);
-}
+fn void accumulate(types::AccumulateArgs* args) @export("accumulate") {}
 
 fn ulong fib(ulong n) {
   ulong a;
