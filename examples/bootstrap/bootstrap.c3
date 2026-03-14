@@ -1,4 +1,4 @@
-// Grey Bootstrap Service
+// Bootstrap Service
 //
 // A genesis service that can create and manage other JAM services.
 // Installed at service ID 1000 in the genesis state.
@@ -87,7 +87,7 @@ fn void accumulate(types::AccumulateArgs* args) @export("accumulate")
         return;
     }
 
-    // The items blob format (from grey-state accumulate.rs):
+    // The items blob format:
     //   varint(item_count) || item_0 || item_1 || ...
     // Each work-item operand starts with discriminator 0x00:
     //   0x00 || package_hash(32) || exports_root(32) || authorizer_hash(32) ||
